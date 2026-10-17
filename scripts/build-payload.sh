@@ -13,6 +13,7 @@ work_dir="$(mktemp -d "${TMPDIR:-/tmp}/astralrinth-build.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
 
 mkdir -p "$ARTIFACT_DIR" "$CACHE_ROOT"
+ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
 
 # Ensure upstream checkout is ready and clean
 if [[ ! -d "$source_dir/.git" ]]; then

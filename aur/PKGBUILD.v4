@@ -1,0 +1,64 @@
+# Maintainer: Lumi <keoo2929@gmail.com>
+pkgname=astralrinth-beta-v4-bin
+pkgver=0.21.901.gf0f73ba4b3
+pkgrel=1
+pkgdesc='Unofficial Arch package of the AstralRinth beta Minecraft launcher (x86-64-v4, AVX-512 optimized)'
+arch=('x86_64')
+url='https://github.com/mozyk96/astralrinth-beta-build'
+license=('GPL-3.0-only')
+depends=(
+  'alsa-lib'
+  'cairo'
+  'gcc-libs'
+  'gdk-pixbuf2'
+  'glib2'
+  # glibc >= 2.33 is required for x86-64-v4 ISA level support
+  'glibc>=2.33'
+  'gtk3'
+  'libayatana-appindicator'
+  'librsvg'
+  'libsoup3'
+  'openssl'
+  'webkit2gtk-4.1'
+  'xdg-utils'
+)
+makedepends=('libarchive' 'zstd')
+optdepends=('java-runtime: run Minecraft instances')
+provides=('astralrinth' 'astralrinth-beta-bin' 'astralrinth-beta-v3-bin')
+conflicts=('astralrinth' 'astralrinth-bin' 'astralrinth-app-bin' 'astralrinth-beta-bin' 'astralrinth-beta-v3-bin')
+source=("$pkgname-$pkgver-rootfs.tar.zst::https://github.com/mozyk96/astralrinth-beta-build/releases/download/v$pkgver/astralrinth-beta-v4-rootfs.tar.zst")
+noextract=("$pkgname-$pkgver-rootfs.tar.zst")
+sha256sums=('20bd3f87e9c8cc92b7f5adab0abdbe87b8995b9d80187cbcafc6d740e31e87b8')
+
+package() {
+  # Runtime guard: reject installation on CPUs that do not support x86-64-v4.
+  # This prevents SIGILL crashes on CPUs without AVX-512 (like AMD Zen 3 / Ryzen 5000).
+  if ! /usr/lib/ld-linux-x86-64.so.2 --help 2>/dev/null | grep -q 'x86-64-v4 (supported'; then
+    printf 'ERROR: This package requires a CPU that supports the x86-64-v4 ISA level\n' >&2
+    printf 'ERROR: (AVX-512F, AVX-512BW, AVX-512CD, AVX-512DQ, AVX-512VL). Use astralrinth-beta-bin or astralrinth-beta-v3-bin instead.\n' >&2
+    return 1
+  fi
+
+  local archive="$srcdir/$pkgname-$pkgver-rootfs.tar.zst"
+  [[ -s "$archive" ]] || {
+    printf 'ERROR: release payload not found: %s\n' "$archive" >&2
+    return 1
+  }
+  install -d "$pkgdir"
+  bsdtar -xpf "$archive" -C "$pkgdir"
+
+  # Compatibility symlinks for standard invocation
+  ln -sf AstralRinthApp "$pkgdir/usr/bin/astralrinth"
+  ln -sf AstralRinthApp "$pkgdir/usr/bin/astralrinth-beta"
+
+  [[ -f "$pkgdir/usr/share/applications/astralrinth-beta.desktop" ]] || {
+    printf 'ERROR: desktop entry missing from release payload.\n' >&2
+    return 1
+  }
+  [[ -s "$pkgdir/usr/share/pixmaps/astralrinth-beta.png" || \
+     -s "$pkgdir/usr/share/pixmaps/astralrinth-beta.svg" || \
+     -s "$pkgdir/usr/share/pixmaps/astralrinth-beta.xpm" ]] || {
+    printf 'ERROR: icon missing from release payload.\n' >&2
+    return 1
+  }
+}
