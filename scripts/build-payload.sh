@@ -152,22 +152,39 @@ for t in "${TARGETS[@]}"; do
 
   export CFLAGS="$t_cflags"
   export CXXFLAGS="$t_cxxflags"
-  export RUSTFLAGS="$t_rustflags"
-  unset CARGO_ENCODED_RUSTFLAGS || true
   export CARGO_TARGET_DIR="$source_dir/target"
+  unset CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS || true
+
+  # For x86-64-v4: proc macros and build scripts are compiled for the HOST and EXECUTED on
+  # the host CPU. If the host lacks AVX-512, passing -C target-cpu=x86-64-v4 via RUSTFLAGS
+  # causes those host-executed artifacts (.so proc macros) to crash with SIGILL.
+  # Solution: pass `--target x86_64-unknown-linux-gnu` to Tauri/Cargo and configure
+  # CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS. Cargo then isolates host tools
+  # (build scripts, proc macros, and syn/quote) with host flags, while applying v4
+  # optimizations exclusively to target crates and final binaries.
+  extra_build_args=()
+  if [[ "$t" == "x86-64-v4" ]]; then
+    unset RUSTFLAGS || true
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$t_rustflags"
+    extra_build_args=("--target" "x86_64-unknown-linux-gnu")
+  else
+    export RUSTFLAGS="$t_rustflags"
+    unset CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS || true
+  fi
+  unset RUSTC_WRAPPER V4_WRAPPER_TARGET_CPU || true
 
   # Clean only bundle packaging output from previous runs, keeping compiled object caches for incremental builds
-  rm -rf "$source_dir/target/release/bundle"
+  rm -rf "$source_dir/target/release/bundle" "$source_dir/target/x86_64-unknown-linux-gnu/release/bundle"
 
   echo "==> Compiling desktop bundle (@modrinth/app) for $t..."
-  if ! mise exec -- pnpm --filter @modrinth/app build --bundles deb; then
-    echo "ERROR: 'pnpm --filter @modrinth/app build --bundles deb' failed for target $t." >&2
+  if ! mise exec -- pnpm --filter @modrinth/app build "${extra_build_args[@]}" --bundles deb; then
+    echo "ERROR: 'pnpm --filter @modrinth/app build' failed for target $t." >&2
     exit 1
   fi
 
-  deb_file="$(find "$target_cargo_dir/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)"
+  deb_file="$(find "$target_cargo_dir" -type f -name '*.deb' -print -quit)"
   [[ -n "$deb_file" ]] || {
-    echo "Tauri did not generate a Debian bundle in $target_cargo_dir/release/bundle/deb." >&2
+    echo "Tauri did not generate a Debian bundle in $target_cargo_dir." >&2
     exit 1
   }
 
