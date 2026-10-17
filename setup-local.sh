@@ -89,6 +89,7 @@ After=network-online.target
 Type=oneshot
 WorkingDirectory=$ROOT
 Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:%h/.cargo/bin:/usr/local/bin:/usr/bin
+Environment=SHARP_IGNORE_GLOBAL_LIBVIPS=1
 ExecStart=%h/.local/bin/astralrinth-publisher --root $ROOT
 Nice=5
 IOSchedulingClass=best-effort

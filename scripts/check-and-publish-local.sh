@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 # Local updater for CachyOS/Arch. It runs only on this machine; no Actions runner or billing needed.
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$HOME/.cargo/bin:/usr/local/bin:/usr/bin:$PATH"
+export SHARP_IGNORE_GLOBAL_LIBVIPS=1
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_URL='https://git.xorison.dev/didirus/AstralRinth.git'
 UPSTREAM_BRANCH='beta'
@@ -108,6 +109,7 @@ printf 'New AstralRinth beta detected: %s\n' "$upstream_sha"
 ARTIFACT_DIR="$ROOT/artifacts" \
 REQUESTED_UPSTREAM_SHA="$upstream_sha" \
 UPSTREAM_URL="$UPSTREAM_URL" \
+SHARP_IGNORE_GLOBAL_LIBVIPS=1 \
 bash "$ROOT/scripts/build-payload.sh"
 
 export GH_TOKEN="$(gh auth token)"

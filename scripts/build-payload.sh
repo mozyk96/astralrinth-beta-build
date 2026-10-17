@@ -67,11 +67,38 @@ export CARGO_TARGET_DIR="$source_dir/target"
 export CARGO_BUILD_JOBS=4
 export TURBO_CONCURRENCY=1
 export NODE_OPTIONS='--max-old-space-size=4096'
+# Force sharp to use prebuilt portable binaries rather than compiling from source
+# against the host's globally-installed libvips (which fails on CachyOS/Arch when node-gyp is absent).
+export SHARP_IGNORE_GLOBAL_LIBVIPS=1
 
 cd "$source_dir"
-mise install
-mise exec -- pnpm install --frozen-lockfile
-mise exec -- pnpm --filter @modrinth/app build -- --bundles deb
+
+echo "==> Setting up build tools via mise..."
+if ! mise install; then
+  echo "ERROR: 'mise install' failed in $source_dir." >&2
+  exit 1
+fi
+
+echo "==> Installing Node.js dependencies via pnpm (frozen lockfile)..."
+if ! mise exec -- pnpm install --frozen-lockfile; then
+  echo "ERROR: 'pnpm install --frozen-lockfile' failed in $source_dir." >&2
+  echo "Build environment diagnostics:" >&2
+  echo "  - Node: $(mise exec -- node --version 2>&1 || echo 'unknown')" >&2
+  echo "  - pnpm: $(mise exec -- pnpm --version 2>&1 || echo 'unknown')" >&2
+  echo "  - SHARP_IGNORE_GLOBAL_LIBVIPS: ${SHARP_IGNORE_GLOBAL_LIBVIPS:-unset}" >&2
+  if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists vips-cpp 2>/dev/null; then
+    echo "  - Host libvips detected: $(pkg-config --modversion vips-cpp 2>&1)" >&2
+  else
+    echo "  - Host libvips detected: none" >&2
+  fi
+  exit 1
+fi
+
+echo "==> Building desktop bundle (@modrinth/app)..."
+if ! mise exec -- pnpm --filter @modrinth/app build -- --bundles deb; then
+  echo "ERROR: 'pnpm --filter @modrinth/app build -- --bundles deb' failed." >&2
+  exit 1
+fi
 
 deb_file="$(find "$source_dir/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)"
 [[ -n "$deb_file" ]] || {
