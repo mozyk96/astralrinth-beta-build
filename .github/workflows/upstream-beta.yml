@@ -1,0 +1,131 @@
+name: Watch upstream beta and publish
+
+on:
+  # Kick off the first build as soon as the bootstrap commit reaches main.
+  push:
+    branches: [main]
+  schedule:
+    # Every four hours, offset from the top of the hour to reduce queue delays.
+    - cron: '17 */4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: astralrinth-beta-upstream
+  cancel-in-progress: false
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_build: ${{ steps.check.outputs.needs_build }}
+      upstream_sha: ${{ steps.check.outputs.upstream_sha }}
+    steps:
+      - name: Check out packaging configuration
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Compare upstream beta revision
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_url='https://git.xorison.dev/didirus/AstralRinth.git'
+          upstream_sha="$(git ls-remote "$upstream_url" refs/heads/beta | awk 'NR == 1 {print $1}')"
+          if [[ ! "$upstream_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Could not resolve the upstream beta branch.' >&2
+            exit 1
+          fi
+          current_sha="$(tr -d '\r\n' < state/upstream-commit.txt 2>/dev/null || true)"
+          needs_build=false
+          if [[ "$upstream_sha" != "$current_sha" ]]; then
+            needs_build=true
+          else
+            current_pkgver="$(sed -n 's/^pkgver=//p' aur/PKGBUILD | head -n 1)"
+            if [[ -z "$current_pkgver" ]] || ! gh release view "v${current_pkgver}" --repo "$GH_REPOSITORY" >/dev/null 2>&1; then
+              needs_build=true
+            fi
+          fi
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "needs_build=$needs_build" >> "$GITHUB_OUTPUT"
+          echo "Upstream beta: $upstream_sha"
+          echo "Build required: $needs_build"
+
+  build:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.needs_build == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    permissions:
+      contents: read
+    steps:
+      - name: Install build and packaging dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed \
+            git curl jq mise cmake openssl pkgconf file patchelf libarchive zstd \
+            webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg libsoup3 xdg-utils \
+            desktop-file-utils alsa-lib cairo gdk-pixbuf2 glib2 python
+      - name: Check out packaging scripts (without persisted credentials)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Build generic x86-64 payload
+        env:
+          REQUESTED_UPSTREAM_SHA: ${{ needs.check-upstream.outputs.upstream_sha }}
+          UPSTREAM_URL: https://git.xorison.dev/didirus/AstralRinth.git
+          ARTIFACT_DIR: ${{ github.workspace }}/artifacts
+        shell: bash
+        run: bash scripts/build-payload.sh
+      - name: Upload payload and manifest
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: astralrinth-beta-payload
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 2
+
+  publish:
+    needs: [check-upstream, build]
+    if: >-
+      always() &&
+      needs.check-upstream.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Install publish dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed git openssh github-cli jq base-devel
+      - name: Check out packaging repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Download build output when a new upstream commit was found
+        if: needs.check-upstream.outputs.needs_build == 'true'
+        uses: actions/download-artifact@70fc10e5e6e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: astralrinth-beta-payload
+          path: artifacts
+      - name: Create release, update AUR metadata and publish AUR package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          NEEDS_BUILD: ${{ needs.check-upstream.outputs.needs_build }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_SSH_KNOWN_HOSTS: ${{ secrets.AUR_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: bash scripts/publish-release.sh

@@ -1,0 +1,9 @@
+# CI output and local build products
+artifacts/
+work/
+*.pkg.tar.zst
+*.deb
+__pycache__/
+*.py[cod]
+.env
+*.log
