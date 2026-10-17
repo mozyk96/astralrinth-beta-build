@@ -90,6 +90,7 @@ Type=oneshot
 WorkingDirectory=$ROOT
 Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:%h/.cargo/bin:/usr/local/bin:/usr/bin
 Environment=SHARP_IGNORE_GLOBAL_LIBVIPS=1
+Environment=ASTRALRINTH_TARGETS=x86-64 x86-64-v3 x86-64-v4
 ExecStart=%h/.local/bin/astralrinth-publisher --root $ROOT
 Nice=5
 IOSchedulingClass=best-effort

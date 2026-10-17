@@ -1,78 +1,133 @@
-# AstralRinth Beta — локальний Rust-автоматизатор для Arch/CachyOS
+# AstralRinth Beta — локальний автоматизатор збірки для Arch Linux / CachyOS
 
-Цей набір щодня перевіряє upstream AstralRinth `beta`, за потреби збирає універсальний x86-64 пакет, публікує GitHub Release та оновлює AUR `astralrinth-beta-bin`. GitHub Actions не запускається, платні runner-и й банківська картка не потрібні. Ноутбук має бути увімкнений та мати інтернет.
+Цей проєкт забезпечує повністю локальну, швидку, відтворювану та автоматизовану систему моніторингу upstream AstralRinth (гілка `beta`), багатоцільової компіляції під різні рівні архітектури x86-64, автоматичного тестування, публікації на GitHub Releases та оновлення AUR-пакунка `astralrinth-beta-bin`.
 
-Основний процес-оркестратор написаний на Rust (`src/main.rs`). Він додає часові мітки, записує журнал у `state/publisher.log` і запускає скрипт, який виконує конкретні кроки upstream fetch/build/release/AUR. Компіляція програми AstralRinth використовує upstream toolchain через `mise` і кешує `node_modules`/Cargo target. Це пакет для Arch-сумісних `x86_64`, не для ARM.
+GitHub Actions та платні хмарні runner-и **не використовуються**. Усі операції відбуваються виключно на вашому комп'ютері.
 
-## Одноразове встановлення
+---
 
-Потрібні `gh`, авторизація GitHub CLI, `git`, `rsync`, `cargo`/`rustc`, `makepkg`, `mise`, Python, `jq`, `curl`, `systemd` та зареєстрований у AUR публічний ключ, відповідний до `~/.ssh/astralrinth_beta_aur_ci_ed25519`. Приватний ключ ніколи не додається в Git.
+## 1. Архітектурні цілі (CPU ISA Levels)
 
-1. Розпакуй ZIP у `~/Завантажене/astralrinth-build-kit`.
-2. Відкрий fish та виконай одну команду:
+Система підтримує збірку під 3 рівні мікроархітектури процесорів x86-64:
 
-```fish
-fish ~/Завантажене/astralrinth-build-kit/bootstrap.fish
+| Рівень | Інструкції | Цільові процесори | Артефакт у GitHub Release | Призначення в AUR |
+| :--- | :--- | :--- | :--- | :--- |
+| **x86-64** (baseline) | Базовий 64-бітний набір (SSE/SSE2) | Будь-який 64-бітний процесор AMD / Intel | `astralrinth-beta-rootfs.tar.zst` | **Основний пакет** (`astralrinth-beta-bin`) |
+| **x86-64-v3** | AVX, AVX2, FMA, BMI1, BMI2, F16C | AMD Zen 1/2/3 (Ryzen 5600H тощо), Intel Haswell+ | `astralrinth-beta-v3-rootfs.tar.zst` | Оптимізований реліз у GitHub |
+| **x86-64-v4** | AVX-512 (F, CD, BW, DQ, VL) | AMD Zen 4/5, Intel Skylake-X, Ice/Tiger Lake+ | `astralrinth-beta-v4-rootfs.tar.zst` | Оптимізований реліз у GitHub |
+
+> [!NOTE]
+> Компіляція ніколи не використовує непереносні прапорці `-march=native` чи `-C target-cpu=native`. Усі артефакти строго відповідають стандартизованим рівням мікроархітектури.
+
+### Чому базовий x86-64 використовується для AUR?
+В Arch Linux та AUR пакунки з суфіксом `-bin` за стандартом призначені для максимально широкого кола користувачів. Випуск виключно `v3` в AUR призвів би до аварійного завершення (`SIGILL: Illegal instruction`) у користувачів зі старішими процесорами. Тому:
+1. AUR-пакунок `astralrinth-beta-bin` завжди використовує сумісний базовий payload `x86-64`.
+2. Користувачі з сучасними процесорами (наприклад, CachyOS / Zen 3 / Zen 4) можуть завантажити оптимізовані архіви `v3` або `v4` безпосередньо з кожного GitHub Release.
+
+---
+
+## 2. Ізольовані кеші та інкрементальна компіляція
+
+Для збереження швидкодії та запобігання конфліктам між архітектурами реалізовано багаторівневу структуру кешування:
+
+```text
+~/.cache/astralrinth-beta-build/
+├── AstralRinth/                # Робочий вихідний код upstream (git checkout)
+│   ├── node_modules/           # Кеш залежностей pnpm (включно з prebuilt sharp)
+│   ├── .turbo/                 # Кеш збірки веб-фронтенду Turborepo (Vite/Vue)
+│   └── target -> [symlink]     # Динамічний симлінк на активний cargo-target
+├── cargo-target-x86-64/        # Повний ізольований кеш компіляції Rust для baseline
+├── cargo-target-x86-64-v3/     # Повний ізольований кеш компіляції Rust для v3
+└── cargo-target-x86-64-v4/     # Повний ізольований кеш компіляції Rust для v4
 ```
 
-Bootstrap клонує `mozyk96/astralrinth-beta-build` у `~/astralrinth-beta-build` (або використає наявний checkout), перенесе файли з ZIP, збере Rust-програму, підготує systemd user timer, запушить зміни в GitHub і ввімкне таймер. Наявний `LICENSE`, PKGBUILD і `.SRCINFO` не перезаписуються під час копіювання; setup оновить метадані за потреби.
+### Переваги такої структури:
+1. **Повна ізоляція артефактів**: Збірка під `v3` чи `v4` не перезаписує і не інвалідує об'єктні файли базового `x86-64`.
+2. **Захист від `git clean`**: Каталоги `cargo-target-*` розміщені поза деревом git upstream-репозиторію. Команда `git clean -fd` у коді AstralRinth не видаляє гігабайти скомпільованих Rust-бібліотек.
+3. **Миттєвий фронтенд завдяки Turborepo**: При збірці декількох цілей фронтенд збирається один раз, а для решти цілей відновлюється з кешу за частки секунди (`FULL TURBO`).
 
-Якщо потрібні системні залежності відсутні, setup покаже помилку з назвою команди/пакета. Не вводь платіжні дані: вони не потрібні.
+---
 
-## Розклад і журнал
+## 3. Автоматичне тестування та валідація
 
-- Перша автоматична перевірка — приблизно через 10 хвилин після запуску user systemd manager.
-- Далі — один раз на день за календарним розкладом systemd.
-- `Persistent=true` дозволяє виконати пропущений календарний запуск, коли user manager знову активується.
-- `loginctl enable-linger` вмикається setup-скриптом, якщо система це дозволяє. Якщо ні, виконай `sudo loginctl enable-linger "$USER"`, щоб user services могли працювати без активної графічної сесії.
-- Під час вимкнення ноутбука збірка не відбувається.
+Перед створенням релізу кожен скомпільований payload проходить автоматизований цикл перевірок:
 
-Статус:
+1. **Перевірка структури та десктоп-інтеграції**:
+   - Наявність виконуваного файлу `usr/bin/AstralRinthApp`.
+   - Наявність ліцензії `COPYING.md`.
+   - Валідація `.desktop` файлу утилітою `desktop-file-validate`.
+   - Перевірка наявності іконки в `usr/share/pixmaps/`.
+2. **Динамічний аналіз залежностей (`ldd`)**:
+   - Перевірка відсутності незадоволених спільних бібліотек (`not found`).
+3. **ISA-aware Smoke Testing**:
+   - Якщо хостовий процесор підтримує цільову інструкцію (перевіряється через `/usr/lib/ld-linux-x86-64.so.2 --help` та `/proc/cpuinfo`), запускається тестовий запуск бінарника з таймаутом (`timeout 2s`).
+   - Перевіряється код виходу: якщо програма зазнає збою з кодом 132 (`SIGILL`) або 127 (`Load Error`), процес негайно зупиняється з помилкою.
+   - Для цілей, які хостовий процесор фізично не підтримує (наприклад, `v4` на AMD Zen 3), виконання безпечно пропускається, а натомість перевіряються заголовки ELF (`readelf`).
 
-```fish
+---
+
+## 4. Rust-оркестратор (`astralrinth-publisher`)
+
+Оркестратор керує перевірками, збіркою та публікацією.
+
+### Доступні прапорці:
+
+```bash
+astralrinth-publisher [OPTIONS]
+```
+
+- `--root <PATH>`: Шлях до кореня проєкту (за замовчуванням визначається автоматично).
+- `--targets <СПИСОК>`, `-t`: Вибір цілей для збірки (`base`, `v3`, `v4`, `all`, або через кому `base,v3`).
+- `--force`, `-f`: Примусова збірка та публікація, навіть якщо upstream-коміт не змінився.
+- `--status`, `-s`: Вивід детальної діагностики стану системи (upstream commit, AUR, стан кешів, підтримка ISA).
+- `--clean [TARGET]`: Очищення кешу збірки (`all`, `base`, `v3`, `v4`, або `source`).
+- `--help`, `-h`: Довідка.
+
+### Приклади використання:
+
+```bash
+# Перевірити статус системи та кешів
+astralrinth-publisher --status
+
+# Зібрати та опублікувати всі три цілі
+astralrinth-publisher --targets all
+
+# Зібрати лише оптимізовану v3 версію
+astralrinth-publisher --targets v3 --force
+
+# Очистити кеш v4
+astralrinth-publisher --clean v4
+```
+
+---
+
+## 5. Системний таймер systemd
+
+Періодичну фонову перевірку виконує користувацький юніт `systemd`:
+
+```bash
+# Статус таймера
 systemctl --user status astralrinth-beta-check.timer
-systemctl --user list-timers astralrinth-beta-check.timer
-```
 
-Журнал systemd:
+# Перегляд логів останніх перевірок
+journalctl --user -u astralrinth-beta-check.service -n 100 --no-pager
 
-```fish
-journalctl --user -u astralrinth-beta-check.service -n 150 --no-pager
-```
-
-Журнал Rust-оркестратора:
-
-```fish
+# Перегляд логів оркестратора
 tail -n 100 ~/astralrinth-beta-build/state/publisher.log
 ```
 
-Ручний запуск:
+---
 
-```fish
-~/.local/bin/astralrinth-publisher --root "$HOME/astralrinth-beta-build"
-```
+## 6. Налаштування AUR SSH-ключа
 
-Вимкнути автоматизацію:
+Для публікації пакунка в AUR використовується виділений SSH-ключ `~/.ssh/astralrinth_beta_aur_ci_ed25519`.
 
-```fish
-systemctl --user disable --now astralrinth-beta-check.timer
-```
+Якщо публікація в AUR завершується повідомленням `Permission denied (publickey)`:
+1. Скопіюйте вміст відкритого ключа:
+   ```bash
+   cat ~/.ssh/astralrinth_beta_aur_ci_ed25519.pub
+   ```
+2. Відкрийте профіль облікового запису AUR: [https://aur.archlinux.org/account/](https://aur.archlinux.org/account/)
+3. Вставте ключ у поле **SSH Public Key** та натисніть кнопку **Save**.
 
-## Після успішної публікації
-
-```fish
-paru -S astralrinth-beta-bin
-# або yay -S astralrinth-beta-bin
-```
-
-Пакет встановлює `.desktop` launcher та іконку у стандартні системні каталоги, тому KDE Plasma може знаходити AstralRinth через меню пошуку. `paru`/`yay` встановлюють пакет, а інтеграцію меню визначають файли, які встановлює сам пакет.
-
-## Важливо
-
-Перший білд може бути довгим і навантажувати CPU. Успішність справжньої збірки не можна гарантувати до першого запуску на твоєму CachyOS: це середовище не має upstream build toolchain та доступу до твого GitHub/AUR облікового запису. Якщо щось падає, надішли помилку з `journalctl` і `state/publisher.log`.
-
-Це неофіційне пакування. Ліцензія в корені репозиторію стосується власних скриптів і конфігурацій, а не AstralRinth, його брендингу чи сторонніх компонентів.
-
-Upstream: https://git.xorison.dev/didirus/AstralRinth  
-GitHub: https://github.com/mozyk96/astralrinth-beta-build  
-AUR: https://aur.archlinux.org/packages/astralrinth-beta-bin
+Після збереження наступний запуск автоматично здійснить push до AUR.
