@@ -95,8 +95,8 @@ if ! mise exec -- pnpm install --frozen-lockfile; then
 fi
 
 echo "==> Building desktop bundle (@modrinth/app)..."
-if ! mise exec -- pnpm --filter @modrinth/app build -- --bundles deb; then
-  echo "ERROR: 'pnpm --filter @modrinth/app build -- --bundles deb' failed." >&2
+if ! mise exec -- pnpm --filter @modrinth/app build --bundles deb; then
+  echo "ERROR: 'pnpm --filter @modrinth/app build --bundles deb' failed." >&2
   exit 1
 fi
 
