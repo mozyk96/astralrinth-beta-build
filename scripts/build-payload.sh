@@ -40,6 +40,12 @@ actual_sha="$(git -C "$source_dir" rev-parse HEAD)"
 source_date_epoch="$(git -C "$source_dir" show -s --format=%ct HEAD)"
 export SOURCE_DATE_EPOCH="$source_date_epoch"
 
+# AstralRinth requires packages/app-lib/.env to compile the backend crate (theseus).
+# Upstream CI creates this by copying packages/app-lib/.env.prod to packages/app-lib/.env.
+if [[ -f "$source_dir/packages/app-lib/.env.prod" ]]; then
+  cp -f "$source_dir/packages/app-lib/.env.prod" "$source_dir/packages/app-lib/.env"
+fi
+
 version="$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
   "$source_dir/apps/app-frontend/package.json" | head -n 1)"
 if [[ ! "$version" =~ ^[0-9][A-Za-z0-9.+_-]*$ ]]; then
@@ -95,6 +101,7 @@ if ! mise exec -- pnpm install --frozen-lockfile; then
 fi
 
 echo "==> Building desktop bundle (@modrinth/app)..."
+rm -rf "$source_dir/target/release/bundle"
 if ! mise exec -- pnpm --filter @modrinth/app build --bundles deb; then
   echo "ERROR: 'pnpm --filter @modrinth/app build --bundles deb' failed." >&2
   exit 1
