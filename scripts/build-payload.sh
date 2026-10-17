@@ -5,15 +5,25 @@ set -euo pipefail
 : "${UPSTREAM_URL:?UPSTREAM_URL is required}"
 : "${ARTIFACT_DIR:?ARTIFACT_DIR is required}"
 
-work_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/astralrinth-build.XXXXXX")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+CACHE_ROOT="${BUILD_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/astralrinth-beta-build}"
+source_dir="$CACHE_ROOT/AstralRinth"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/astralrinth-build.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
-source_dir="$work_dir/AstralRinth"
 payload_dir="$work_dir/payload"
-mkdir -p "$ARTIFACT_DIR" "$payload_dir"
+mkdir -p "$ARTIFACT_DIR" "$payload_dir" "$CACHE_ROOT"
 
-# Fetch only the beta branch and pin the build to the revision checked by the workflow.
-git init -q "$source_dir"
-git -C "$source_dir" remote add origin "$UPSTREAM_URL"
+# Reuse the isolated source checkout so pnpm's node_modules and Cargo target cache survive
+# between releases. This directory is build-owned; no user project files live here.
+if [[ ! -d "$source_dir/.git" ]]; then
+  mkdir -p "$source_dir"
+  git init -q "$source_dir"
+  git -C "$source_dir" remote add origin "$UPSTREAM_URL"
+fi
+# Discard only changes in the disposable upstream checkout, never the packaging repo.
+git -C "$source_dir" reset --hard >/dev/null 2>&1 || true
+git -C "$source_dir" clean -fd >/dev/null 2>&1 || true
 if ! git -C "$source_dir" fetch --depth=1 origin "$REQUESTED_UPSTREAM_SHA"; then
   git -C "$source_dir" fetch --depth=1 origin beta
 fi
@@ -74,7 +84,7 @@ data_member="$(ar t "$deb_file" | grep -E '^data\.tar\.(zst|xz|gz|bz2)$' | head 
   exit 1
 }
 ar p "$deb_file" "$data_member" | bsdtar -xpf - -C "$payload_dir"
-python "$GITHUB_WORKSPACE/scripts/normalize-desktop.py" "$payload_dir"
+python "$PROJECT_ROOT/scripts/normalize-desktop.py" "$payload_dir"
 desktop-file-validate "$payload_dir/usr/share/applications/astralrinth-beta.desktop"
 
 # Ship the upstream copyright/licensing notes inside the installed package.

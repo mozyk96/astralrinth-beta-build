@@ -1,0 +1,10 @@
+[package]
+name = "astralrinth-publisher"
+version = "0.1.0"
+edition = "2021"
+description = "Local daily updater, builder, and publisher for unofficial AstralRinth beta packages"
+license = "MIT"
+
+[[bin]]
+name = "astralrinth-publisher"
+path = "src/main.rs"

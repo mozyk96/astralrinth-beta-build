@@ -1,87 +1,78 @@
-# AstralRinth Beta — Arch Linux build pipeline
+# AstralRinth Beta — локальний Rust-автоматизатор для Arch/CachyOS
 
-Неофіційний пакувальний проєкт. Він перевіряє upstream-гілку `beta`, збирає AstralRinth у GitHub Actions і після успішної збірки публікує реліз у цьому GitHub-репозиторії та оновлює окремий пакет AUR `astralrinth-beta-bin`.
+Цей набір щодня перевіряє upstream AstralRinth `beta`, за потреби збирає універсальний x86-64 пакет, публікує GitHub Release та оновлює AUR `astralrinth-beta-bin`. GitHub Actions не запускається, платні runner-и й банківська картка не потрібні. Ноутбук має бути увімкнений та мати інтернет.
 
-## Що буде встановлено
+Основний процес-оркестратор написаний на Rust (`src/main.rs`). Він додає часові мітки, записує журнал у `state/publisher.log` і запускає скрипт, який виконує конкретні кроки upstream fetch/build/release/AUR. Компіляція програми AstralRinth використовує upstream toolchain через `mise` і кешує `node_modules`/Cargo target. Це пакет для Arch-сумісних `x86_64`, не для ARM.
 
-- `astralrinth-beta-bin` — бінарний пакет для Arch Linux та сумісних дистрибутивів, `x86_64`, з базовими інструкціями CPU (`x86-64`), без `native`.
-- `AstralRinth (Beta)` у меню KDE Plasma: пакет постачає `/usr/share/applications/astralrinth-beta.desktop`, пошукові ключові слова Minecraft/Modrinth/AstralRinth та стабільне ім'я іконки `astralrinth-beta` у `/usr/share/pixmaps/`.
-- GitHub Actions запускається після першого push у `main`, вручну та щочотири години (`17 */4 * * *`, UTC). Якщо upstream commit не змінився і реліз існує, збірка пропускається.
-- Кожен реліз містить compressed rootfs payload, SHA-256 і manifest з upstream commit/версією.
-- AUR отримує `PKGBUILD` і `.SRCINFO`, які вказують на GitHub Release. Сам AUR не зберігає бінарник.
+## Одноразове встановлення
 
-**Неофіційний beta-білд.** Це не офіційний пакет AstralRinth. Оновлення beta можуть бути нестабільними.
+Потрібні `gh`, авторизація GitHub CLI, `git`, `rsync`, `cargo`/`rustc`, `makepkg`, `mise`, Python, `jq`, `curl`, `systemd` та зареєстрований у AUR публічний ключ, відповідний до `~/.ssh/astralrinth_beta_aur_ci_ed25519`. Приватний ключ ніколи не додається в Git.
 
-## 1. Однією командою завантажити pipeline у GitHub
-
-Потрібні CachyOS/Arch, `fish`, `git`, `curl`, `openssh`, `base-devel`, `python`, `unzip` та вже авторизований GitHub CLI. Перевір авторизацію:
+1. Розпакуй ZIP у `~/Завантажене/astralrinth-build-kit`.
+2. Відкрий fish та виконай одну команду:
 
 ```fish
-gh auth status
+fish ~/Завантажене/astralrinth-build-kit/bootstrap.fish
 ```
 
-Якщо ZIP уже лежить у `~/Downloads`, виконай з fish одну команду (вона розпакує набір і створить публічний GitHub-репозиторій):
+Bootstrap клонує `mozyk96/astralrinth-beta-build` у `~/astralrinth-beta-build` (або використає наявний checkout), перенесе файли з ZIP, збере Rust-програму, підготує systemd user timer, запушить зміни в GitHub і ввімкне таймер. Наявний `LICENSE`, PKGBUILD і `.SRCINFO` не перезаписуються під час копіювання; setup оновить метадані за потреби.
+
+Якщо потрібні системні залежності відсутні, setup покаже помилку з назвою команди/пакета. Не вводь платіжні дані: вони не потрібні.
+
+## Розклад і журнал
+
+- Перша автоматична перевірка — приблизно через 10 хвилин після запуску user systemd manager.
+- Далі — один раз на день за календарним розкладом systemd.
+- `Persistent=true` дозволяє виконати пропущений календарний запуск, коли user manager знову активується.
+- `loginctl enable-linger` вмикається setup-скриптом, якщо система це дозволяє. Якщо ні, виконай `sudo loginctl enable-linger "$USER"`, щоб user services могли працювати без активної графічної сесії.
+- Під час вимкнення ноутбука збірка не відбувається.
+
+Статус:
 
 ```fish
-cd ~/Downloads; and unzip -o astralrinth-build-kit.zip; and cd astralrinth-build-kit; and fish ./setup.fish
+systemctl --user status astralrinth-beta-check.timer
+systemctl --user list-timers astralrinth-beta-check.timer
 ```
 
-Назва репозиторію за замовчуванням `astralrinth-beta-build`; можна передати іншу: `fish ./setup.fish my-astralrinth-beta`. Репозиторій має бути публічним, бо PKGBUILD завантажує release asset без GitHub-токена.
-
-Setup скрипт перевіряє доступність AUR package base `astralrinth-beta-bin`, підставляє власника/репозиторій у PKGBUILD, генерує `.SRCINFO`, пушить файли в GitHub і готує окремий SSH-ключ для публікації в AUR. Він не використовує personal SSH key і не робить force-push.
-
-## 2. Один обов'язковий крок AUR
-
-Автоматично від імені користувача додати SSH public key в AUR неможливо. Скрипт покаже **публічний** ключ і відкриє [AUR account settings](https://aur.archlinux.org/account/). Додай його в `My Account → SSH Public Keys`.
-
-Для `known_hosts` скрипт використовує наявний локальний запис, якщо він у тебе вже є. Інакше він завантажує ключ через `ssh-keyscan` і показує відбиток; це trust-on-first-use, тому не підтверджуй його без незалежної перевірки. Не публікуй приватний ключ. Після реєстрації ключа підтверди запит у терміналі: приватний ключ і pinned `known_hosts` будуть додані як GitHub Actions secrets, а перший workflow запуститься вручну.
-
-Якщо скрипт завершився до налаштування секретів, знову виконай `fish ./setup.fish` з цієї папки. Назву наявного GitHub-репозиторію скрипт зчитає з `origin` автоматично. Повторний запуск призначений бути безпечним: він не стирає локальні файли та не перезаписує GitHub історію. Якщо локальна й віддалена гілки розійшлися, він зупиниться, а не буде робити force-push.
-
-## 3. Де дивитися збірку
-
-У GitHub відкрий `Actions → Watch upstream beta and publish`. Перший запуск компілює джерела з конкретного upstream commit. Коли все пройде, у `Releases` з'явиться версійний tag, а workflow оновить рецепт AUR. Заплановані workflow можуть стартувати із затримкою; «кожні 4 години» не гарантує запуск рівно до секунди.
-
-Публікувальний job має `contents: write`; інші jobs — тільки читання. Секрет AUR доступний лише публікувальному job і не передається коду AstralRinth під час компіляції.
-
-## 4. Як встановити саму програму
-
-Після того, як перший workflow завершився успішно і пакет уже є в AUR, у розпакованій папці виконай:
+Журнал systemd:
 
 ```fish
-fish ./install.fish
+journalctl --user -u astralrinth-beta-check.service -n 150 --no-pager
 ```
 
-Скрипт використовує `paru`, якщо він встановлений, інакше `yay`, а за їх відсутності — `git + makepkg`. Еквівалентно:
+Журнал Rust-оркестратора:
+
+```fish
+tail -n 100 ~/astralrinth-beta-build/state/publisher.log
+```
+
+Ручний запуск:
+
+```fish
+~/.local/bin/astralrinth-publisher --root "$HOME/astralrinth-beta-build"
+```
+
+Вимкнути автоматизацію:
+
+```fish
+systemctl --user disable --now astralrinth-beta-check.timer
+```
+
+## Після успішної публікації
 
 ```fish
 paru -S astralrinth-beta-bin
-# або
- yay -S astralrinth-beta-bin
+# або yay -S astralrinth-beta-bin
 ```
 
-`paru`/`yay` не створюють іконки автоматично: вони встановлюють файли, визначені в `PKGBUILD`. Наш пакет включає `.desktop` entry та іконку в стандартних каталогах, тому KDE Plasma знаходить програму через пошук. Якщо меню не оновилось відразу:
+Пакет встановлює `.desktop` launcher та іконку у стандартні системні каталоги, тому KDE Plasma може знаходити AstralRinth через меню пошуку. `paru`/`yay` встановлюють пакет, а інтеграцію меню визначають файли, які встановлює сам пакет.
 
-```fish
-kbuildsycoca6 --noincremental
-```
+## Важливо
 
-Перевірка встановлених файлів:
+Перший білд може бути довгим і навантажувати CPU. Успішність справжньої збірки не можна гарантувати до першого запуску на твоєму CachyOS: це середовище не має upstream build toolchain та доступу до твого GitHub/AUR облікового запису. Якщо щось падає, надішли помилку з `journalctl` і `state/publisher.log`.
 
-```fish
-pacman -Ql astralrinth-beta-bin | grep -E 'applications/|pixmaps/|icons/'
-```
+Це неофіційне пакування. Ліцензія в корені репозиторію стосується власних скриптів і конфігурацій, а не AstralRinth, його брендингу чи сторонніх компонентів.
 
-Пакет конфліктує з `astralrinth-bin` та `astralrinth-app-bin`, бо вони встановлюють ту саму програму. Видали інший пакет через `paru -R`/`yay -R` перед встановленням, якщо він уже стоїть.
-
-## 5. Архітектура/межі
-
-Збірка компілюється з `RUSTFLAGS='-C target-cpu=x86-64'` і `-march=x86-64 -mtune=generic`; це загальна база x86-64, а не оптимізація конкретно під ноутбук. ARM/aarch64 не підтримується цим пакетом. Збірка та встановлення націлені на Arch-подібну систему з `webkit2gtk-4.1` та іншими залежностями в PKGBUILD, а не на довільний Linux.
-
-Пайплайн навмисно завершується помилкою, якщо upstream більше не створює `.deb`, launcher `.desktop`, виконуваний файл чи іконку. Це краще, ніж випустити пакет, що не запускається. До поширення перевір перший workflow, логи, контрольну суму й вміст release.
-
-## Посилання
-
-- Upstream: https://git.xorison.dev/didirus/AstralRinth
-- AUR package після першої публікації: https://aur.archlinux.org/packages/astralrinth-beta-bin
-- ArchWiki: [AUR submission guidelines](https://wiki.archlinux.org/title/AUR_submission_guidelines), [Desktop entries](https://wiki.archlinux.org/title/Desktop_entry)
+Upstream: https://git.xorison.dev/didirus/AstralRinth  
+GitHub: https://github.com/mozyk96/astralrinth-beta-build  
+AUR: https://aur.archlinux.org/packages/astralrinth-beta-bin

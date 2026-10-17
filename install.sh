@@ -17,7 +17,7 @@ elif command -v git >/dev/null 2>&1 && command -v makepkg >/dev/null 2>&1; then
   trap 'rm -rf "$tmp_dir"' EXIT
   if ! git clone "https://aur.archlinux.org/$package.git" "$tmp_dir/$package"; then
     echo "Could not clone AUR package '$package'. It may not be published yet." >&2
-    echo 'Check the GitHub Actions workflow and try again after it succeeds.' >&2
+    echo 'The local builder must publish the first GitHub Release/AUR package before installation can work.' >&2
     exit 1
   fi
   cd "$tmp_dir/$package"

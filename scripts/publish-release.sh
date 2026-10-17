@@ -59,8 +59,12 @@ NOTES
   printf '%s\n' "$tag" > state/release-tag.txt
   (cd aur && makepkg --printsrcinfo > .SRCINFO)
 
-  git config user.name 'github-actions[bot]'
-  git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+  commit_name="${GIT_COMMIT_NAME:-$(git config user.name || true)}"
+  commit_email="${GIT_COMMIT_EMAIL:-$(git config user.email || true)}"
+  [[ -n "$commit_name" ]] || commit_name='astralrinth-local-builder'
+  [[ -n "$commit_email" ]] || commit_email='astralrinth-local-builder@users.noreply.github.com'
+  git config user.name "$commit_name"
+  git config user.email "$commit_email"
   git add aur/PKGBUILD aur/.SRCINFO state/upstream-commit.txt state/release-tag.txt
   if ! git diff --cached --quiet; then
     git commit -m "ci: publish AstralRinth beta $pkgver"
@@ -77,22 +81,34 @@ else
   fi
 fi
 
-# Only this trusted publishing job receives the AUR key. The upstream build job never does.
-if [[ -z "${AUR_SSH_PRIVATE_KEY:-}" ]]; then
-  echo '::warning::AUR_SSH_PRIVATE_KEY is not configured; GitHub Release was updated, but AUR push was skipped.'
-  exit 0
+# AUR publishing uses a dedicated local key, or a secret when invoked from a trusted remote publisher.
+if [[ -z "${AUR_SSH_PRIVATE_KEY:-}" && -z "${AUR_SSH_PRIVATE_KEY_FILE:-}" ]]; then
+  echo 'No AUR SSH private key supplied; GitHub Release was updated, but AUR push was skipped.' >&2
+  exit 1
 fi
-if [[ -z "${AUR_SSH_KNOWN_HOSTS:-}" ]]; then
-  echo 'AUR_SSH_KNOWN_HOSTS is missing; refusing unauthenticated host-key checking.' >&2
+if [[ -z "${AUR_SSH_KNOWN_HOSTS:-}" && -z "${AUR_SSH_KNOWN_HOSTS_FILE:-}" ]]; then
+  echo 'AUR known_hosts is missing; refusing unauthenticated host-key checking.' >&2
   exit 1
 fi
 
 ssh_dir="$HOME/.ssh"
 install -d -m 700 "$ssh_dir"
-printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$ssh_dir/aur_astralrinth_beta"
-printf '%s\n' "$AUR_SSH_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
-chmod 600 "$ssh_dir/aur_astralrinth_beta" "$ssh_dir/known_hosts"
-export GIT_SSH_COMMAND="ssh -i $ssh_dir/aur_astralrinth_beta -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts -o StrictHostKeyChecking=yes"
+if [[ -n "${AUR_SSH_PRIVATE_KEY_FILE:-}" && -n "${AUR_SSH_KNOWN_HOSTS_FILE:-}" ]]; then
+  aur_key_file="$AUR_SSH_PRIVATE_KEY_FILE"
+  aur_known_hosts_file="$AUR_SSH_KNOWN_HOSTS_FILE"
+  [[ -s "$aur_key_file" && -s "$aur_known_hosts_file" ]] || {
+    echo 'Local AUR SSH key or pinned known_hosts file is missing.' >&2
+    exit 1
+  }
+else
+  aur_key_file="$ssh_dir/aur_astralrinth_beta"
+  aur_known_hosts_file="$ssh_dir/known_hosts_aur_astralrinth_beta"
+  printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$aur_key_file"
+  printf '%s\n' "$AUR_SSH_KNOWN_HOSTS" > "$aur_known_hosts_file"
+  chmod 600 "$aur_key_file" "$aur_known_hosts_file"
+fi
+chmod 600 "$aur_key_file" "$aur_known_hosts_file"
+export GIT_SSH_COMMAND="ssh -i $aur_key_file -o IdentitiesOnly=yes -o UserKnownHostsFile=$aur_known_hosts_file -o StrictHostKeyChecking=yes"
 
 maintainer_line="$(sed -n 's/^# Maintainer: //p' aur/PKGBUILD | head -n 1)"
 maintainer_name="${maintainer_line%% <*}"
@@ -103,11 +119,29 @@ maintainer_email="${maintainer_email%>}"
   exit 1
 }
 
-work_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/astralrinth-aur.XXXXXX")"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/astralrinth-aur.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
 repo_dir="$work_dir/aur"
-# The AUR supports cloning an empty repository when a package is submitted for the first time.
-git -c init.defaultBranch=master clone "ssh://aur@aur.archlinux.org/astralrinth-beta-bin.git" "$repo_dir"
+aur_url='ssh://aur@aur.archlinux.org/astralrinth-beta-bin.git'
+# Existing package: clone it. New package: initialise a local git repo only after
+# confirming through the AUR RPC API that the package base does not exist.
+if git clone "$aur_url" "$repo_dir"; then
+  :
+else
+  rpc_file="$work_dir/aur-info.json"
+  if ! curl -fsSL -G --data-urlencode 'arg[]=astralrinth-beta-bin' https://aur.archlinux.org/rpc/v5/info -o "$rpc_file"; then
+    echo 'Could not verify whether the AUR package exists after clone failed; refusing to push.' >&2
+    exit 1
+  fi
+  if ! jq -e '.resultcount == 0' "$rpc_file" >/dev/null; then
+    echo 'AUR clone failed but the package exists; check the SSH key, network, and permissions.' >&2
+    exit 1
+  fi
+  rm -rf -- "$repo_dir"
+  mkdir -p "$repo_dir"
+  git -C "$repo_dir" init --initial-branch=master
+  git -C "$repo_dir" remote add origin "$aur_url"
+fi
 
 if git -C "$repo_dir" rev-parse --verify HEAD >/dev/null 2>&1; then
   git -C "$repo_dir" fetch origin master
