@@ -1,6 +1,6 @@
 pkgbase = astralrinth-beta-bin
 	pkgdesc = Unofficial Arch package of the AstralRinth beta Minecraft launcher
-	pkgver = 0.0.0.g0000000000
+	pkgver = 0.21.901.gf0f73ba4b3
 	pkgrel = 1
 	url = https://github.com/mozyk96/astralrinth-beta-build
 	arch = x86_64
@@ -24,8 +24,8 @@ pkgbase = astralrinth-beta-bin
 	provides = astralrinth
 	conflicts = astralrinth-bin
 	conflicts = astralrinth-app-bin
-	noextract = astralrinth-beta-bin-0.0.0.g0000000000-rootfs.tar.zst
-	source = astralrinth-beta-bin-0.0.0.g0000000000-rootfs.tar.zst::https://github.com/mozyk96/astralrinth-beta-build/releases/download/v0.0.0.g0000000000/astralrinth-beta-rootfs.tar.zst
-	sha256sums = SKIP
+	noextract = astralrinth-beta-bin-0.21.901.gf0f73ba4b3-rootfs.tar.zst
+	source = astralrinth-beta-bin-0.21.901.gf0f73ba4b3-rootfs.tar.zst::https://github.com/mozyk96/astralrinth-beta-build/releases/download/v0.21.901.gf0f73ba4b3/astralrinth-beta-rootfs.tar.zst
+	sha256sums = c18cbc8de375acf027457066bab93631bc55d60f699d741a2e7d1e33f5d3b0f8
 
 pkgname = astralrinth-beta-bin
