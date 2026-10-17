@@ -22,6 +22,7 @@ pkgbase = astralrinth-beta-bin
 	depends = xdg-utils
 	optdepends = java-runtime: run Minecraft instances
 	provides = astralrinth
+	conflicts = astralrinth
 	conflicts = astralrinth-bin
 	conflicts = astralrinth-app-bin
 	noextract = astralrinth-beta-bin-0.21.901.gf0f73ba4b3-rootfs.tar.zst
